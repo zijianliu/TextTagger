@@ -13,7 +13,7 @@ export default function Home() {
 
   useEffect(() => {
     loadHistory();
-  }, []);
+  }, [filter]);
 
   const loadHistory = async () => {
     try {

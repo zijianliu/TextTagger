@@ -5,7 +5,7 @@ import pandas as pd
 import io
 from app.services.classifier import RuleBasedClassifier
 from app.models import SessionLocal, Classification, engine, Base
-from datetime import datetime
+from datetime import datetime, timezone
 
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
@@ -67,6 +67,8 @@ def batch_classify(request: BatchClassifyRequest):
     try:
         results = []
         db = SessionLocal()
+        # 获取当前时间戳
+        current_time = datetime.now(timezone.utc)
         
         for text in request.texts:
             # 分类文本
@@ -80,12 +82,12 @@ def batch_classify(request: BatchClassifyRequest):
             )
             db.add(db_classification)
             
-            # 添加到结果列表
+            # 添加到结果列表，使用当前时间戳
             results.append(ClassificationResponse(
                 text=text,
                 category=category,
                 confidence=confidence,
-                timestamp=db_classification.timestamp.isoformat()
+                timestamp=current_time.isoformat()
             ))
         
         db.commit()
@@ -131,25 +133,69 @@ async def upload_file(file: UploadFile = File(...)):
         # 读取文件内容
         contents = await file.read()
         
+        # 检查文件是否为空
+        if not contents:
+            raise HTTPException(status_code=400, detail="文件为空")
+        
         # 根据文件类型解析
         if file.filename.endswith(".txt"):
-            # 解析文本文件
-            texts = contents.decode("utf-8").splitlines()
+            # 解析文本文件，尝试多种编码
+            try:
+                texts = contents.decode("utf-8").splitlines()
+            except UnicodeDecodeError:
+                try:
+                    texts = contents.decode("gbk").splitlines()
+                except UnicodeDecodeError:
+                    texts = contents.decode("latin-1").splitlines()
+            
             # 过滤空行
             texts = [text.strip() for text in texts if text.strip()]
+            
+            # 检查是否有有效文本
+            if not texts:
+                raise HTTPException(status_code=400, detail="文件中没有有效文本")
+                
         elif file.filename.endswith(".csv"):
-            # 解析 CSV 文件
-            df = pd.read_csv(io.BytesIO(contents))
+            # 解析 CSV 文件，尝试多种编码和格式
+            try:
+                # 尝试使用 utf-8 编码，不将第一行作为表头
+                df = pd.read_csv(io.BytesIO(contents), encoding="utf-8", header=None)
+            except UnicodeDecodeError:
+                try:
+                    # 尝试使用 gbk 编码，不将第一行作为表头
+                    df = pd.read_csv(io.BytesIO(contents), encoding="gbk", header=None)
+                except UnicodeDecodeError:
+                    try:
+                        # 尝试使用 latin-1 编码，不将第一行作为表头
+                        df = pd.read_csv(io.BytesIO(contents), encoding="latin-1", header=None)
+                    except Exception as e:
+                        raise HTTPException(status_code=400, detail=f"无法解析 CSV 文件：{str(e)}")
+            
+            # 检查 DataFrame 是否为空
+            if df.empty:
+                raise HTTPException(status_code=400, detail="CSV 文件为空")
+            
+            # 检查是否有列
+            if len(df.columns) == 0:
+                raise HTTPException(status_code=400, detail="CSV 文件没有列")
+            
             # 假设第一列是文本
             texts = df.iloc[:, 0].astype(str).tolist()
+            
             # 过滤空值
             texts = [text.strip() for text in texts if text and text.strip()]
+            
+            # 检查是否有有效文本
+            if not texts:
+                raise HTTPException(status_code=400, detail="CSV 文件第一列没有有效文本")
         else:
             raise HTTPException(status_code=400, detail="不支持的文件类型，仅支持 .txt 和 .csv 文件")
         
         # 批量分类
         results = []
         db = SessionLocal()
+        # 获取当前时间戳
+        current_time = datetime.now(timezone.utc)
         
         for text in texts:
             # 分类文本
@@ -163,12 +209,12 @@ async def upload_file(file: UploadFile = File(...)):
             )
             db.add(db_classification)
             
-            # 添加到结果列表
+            # 添加到结果列表，使用当前时间戳
             results.append(ClassificationResponse(
                 text=text,
                 category=category,
                 confidence=confidence,
-                timestamp=db_classification.timestamp.isoformat()
+                timestamp=current_time.isoformat()
             ))
         
         db.commit()
